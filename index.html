@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Caça ao Alvo</title>
+<style>
+  :root {
+    --bg: #0f1220;
+    --bg-2: #171b2e;
+    --ink: #e8ecff;
+    --muted: #8b93b8;
+    --accent: #ff5470;
+    --accent-2: #34d1bf;
+    --good: #7be495;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: radial-gradient(circle at 30% 20%, var(--bg-2), var(--bg) 70%);
+    color: var(--ink);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    -webkit-tap-highlight-color: transparent;
+  }
+  #wrap {
+    width: min(96vw, 720px);
+    aspect-ratio: 4 / 3;
+    max-height: 94vh;
+    position: relative;
+    border-radius: 20px;
+    overflow: hidden;
+    box-shadow: 0 30px 80px -20px rgba(0,0,0,.6), inset 0 0 0 1px rgba(255,255,255,.05);
+    background:
+      linear-gradient(180deg, rgba(255,255,255,.03), rgba(0,0,0,.15)),
+      var(--bg);
+  }
+  canvas { display: block; width: 100%; height: 100%; cursor: crosshair; }
+
+  .hud {
+    position: absolute; inset: 0;
+    pointer-events: none;
+    padding: 16px 20px;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+  }
+  .hud-row { display: flex; justify-content: space-between; align-items: flex-start; }
+  .stat { background: rgba(0,0,0,.32); backdrop-filter: blur(4px);
+    padding: 8px 14px; border-radius: 12px; line-height: 1.15; }
+  .stat .label { font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+  .stat .value { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .combo { color: var(--accent-2); }
+
+  .timebar-track { height: 6px; background: rgba(255,255,255,.1); border-radius: 99px; overflow: hidden; }
+  .timebar-fill { height: 100%; width: 100%; background: linear-gradient(90deg, var(--accent-2), var(--good)); transition: width .1s linear; }
+
+  .overlay {
+    position: absolute; inset: 0;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 18px; text-align: center; padding: 28px;
+    background: rgba(9, 11, 20, .82);
+    backdrop-filter: blur(6px);
+  }
+  .overlay.hidden { display: none; }
+  .overlay h1 { font-size: clamp(28px, 6vw, 46px); letter-spacing: -.02em; }
+  .overlay h1 .dot { color: var(--accent); }
+  .overlay p { color: var(--muted); max-width: 42ch; line-height: 1.5; }
+  .big-score { font-size: clamp(40px, 12vw, 84px); font-weight: 800; font-variant-numeric: tabular-nums; }
+  .row { display: flex; gap: 22px; flex-wrap: wrap; justify-content: center; }
+  .mini { background: var(--bg-2); border: 1px solid rgba(255,255,255,.07); padding: 10px 18px; border-radius: 12px; }
+  .mini .label { font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+  .mini .value { font-size: 24px; font-weight: 700; }
+  button {
+    pointer-events: auto;
+    font: inherit; font-weight: 700;
+    color: #101223;
+    background: linear-gradient(180deg, #fff, #d9deff);
+    border: none; border-radius: 999px;
+    padding: 14px 34px; font-size: 18px;
+    cursor: pointer;
+    transition: transform .08s ease, box-shadow .2s ease;
+    box-shadow: 0 10px 30px -8px rgba(255,84,112,.5);
+  }
+  button:hover { transform: translateY(-1px); }
+  button:active { transform: translateY(1px) scale(.98); }
+  .hint { font-size: 13px; color: var(--muted); }
+  .new-record { color: var(--good); font-weight: 700; letter-spacing: .04em; animation: pulse 1s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: .55; } }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="game"></canvas>
+
+  <div class="hud">
+    <div class="hud-row">
+      <div class="stat">
+        <div class="label">Pontos</div>
+        <div class="value" id="score">0</div>
+      </div>
+      <div class="stat" style="text-align:right">
+        <div class="label">Combo</div>
+        <div class="value combo" id="combo">x1</div>
+      </div>
+    </div>
+    <div class="timebar-track"><div class="timebar-fill" id="timebar"></div></div>
+  </div>
+
+  <div class="overlay" id="overlay">
+    <h1>Caça ao Alvo<span class="dot">.</span></h1>
+    <p>Os alvos surgem e <b>encolhem</b>. Clique rápido: quanto menor o alvo no momento do acerto, mais pontos. Acertos seguidos aumentam o combo. Errar o clique zera o combo. Você tem <b>30 segundos</b>.</p>
+    <div class="row">
+      <div class="mini"><div class="label">Recorde</div><div class="value" id="best">0</div></div>
+    </div>
+    <button id="startBtn">Começar</button>
+    <div class="hint">Dica: mire nos alvos que estão prestes a sumir para pontuação máxima.</div>
+  </div>
+</div>
+
+<script>
+(() => {
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  const overlay = document.getElementById('overlay');
+  const startBtn = document.getElementById('startBtn');
+  const scoreEl = document.getElementById('score');
+  const comboEl = document.getElementById('combo');
+  const bestEl = document.getElementById('best');
+  const timebar = document.getElementById('timebar');
+
+  const ROUND_MS = 30000;
+  const TARGET_LIFE = 1500;      // tempo de vida base de um alvo (ms)
+  const MAX_R = 46, MIN_R = 12;
+  const BEST_KEY = 'caca-ao-alvo:best';
+
+  let W = 0, H = 0, DPR = 1;
+  function resize() {
+    DPR = Math.min(window.devicePixelRatio || 1, 2);
+    const r = canvas.getBoundingClientRect();
+    W = r.width; H = r.height;
+    canvas.width = W * DPR; canvas.height = H * DPR;
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  const store = {
+    get(k, d) { try { const v = localStorage.getItem(k); return v == null ? d : v; } catch (e) { return d; } },
+    set(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
+  };
+
+  let best = +store.get(BEST_KEY, 0);
+  bestEl.textContent = best;
+
+  let state = 'idle'; // idle | playing | over
+  let targets = [];
+  let particles = [];
+  let floats = [];
+  let score = 0, combo = 0, maxCombo = 0, hits = 0, misses = 0;
+  let roundEnd = 0, lastSpawn = 0, spawnGap = 780;
+  let shakeT = 0;
+
+  // ---- Áudio (WebAudio, sem arquivos) ----
+  let actx = null;
+  function beep(freq, dur = 0.08, type = 'sine', vol = 0.15) {
+    if (!actx) return;
+    const o = actx.createOscillator(), g = actx.createGain();
+    o.type = type; o.frequency.value = freq;
+    o.connect(g); g.connect(actx.destination);
+    const t = actx.currentTime;
+    g.gain.setValueAtTime(vol, t);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.start(t); o.stop(t + dur);
+  }
+  function hitSound(c) { beep(320 + Math.min(c, 12) * 55, 0.09, 'triangle', 0.18); }
+  function missSound() { beep(120, 0.14, 'sawtooth', 0.12); }
+  function endSound() { beep(440, 0.5, 'sine', 0.14); setTimeout(() => beep(294, 0.6, 'sine', 0.12), 120); }
+
+  function spawnTarget() {
+    const r = MAX_R;
+    const pad = r + 8;
+    const x = pad + Math.random() * (W - pad * 2);
+    const y = pad + Math.random() * (H - pad * 2);
+    const life = TARGET_LIFE * (0.72 + Math.random() * 0.5);
+    targets.push({ x, y, born: performance.now(), life, hue: 340 + Math.random() * 40 });
+  }
+
+  function currentRadius(t, now) {
+    const k = (now - t.born) / t.life; // 0..1
+    return MAX_R - (MAX_R - MIN_R) * Math.min(k, 1);
+  }
+
+  function addParticles(x, y, hue, n = 14) {
+    for (let i = 0; i < n; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const sp = 1 + Math.random() * 4;
+      particles.push({ x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp,
+        life: 1, hue: hue + (Math.random() * 30 - 15) });
+    }
+  }
+
+  function pointsFor(radius) {
+    // menor raio => mais pontos (10..100)
+    const k = 1 - (radius - MIN_R) / (MAX_R - MIN_R);
+    return Math.round(10 + k * 90);
+  }
+
+  function start() {
+    if (!actx) { try { actx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) {} }
+    if (actx && actx.state === 'suspended') actx.resume();
+    score = 0; combo = 0; maxCombo = 0; hits = 0; misses = 0;
+    targets = []; particles = []; floats = [];
+    spawnGap = 780;
+    const now = performance.now();
+    roundEnd = now + ROUND_MS;
+    lastSpawn = now;
+    state = 'playing';
+    overlay.classList.add('hidden');
+    updateHud();
+    spawnTarget();
+  }
+
+  function end() {
+    state = 'over';
+    endSound();
+    const isRecord = score > best;
+    if (isRecord) { best = score; store.set(BEST_KEY, best); }
+    const acc = hits + misses > 0 ? Math.round(hits / (hits + misses) * 100) : 0;
+    overlay.innerHTML = `
+      <h1>${isRecord ? 'Novo recorde<span class="dot">!</span>' : 'Fim de rodada'}</h1>
+      <div class="big-score">${score}</div>
+      ${isRecord ? '<div class="new-record">★ melhor pontuação salva ★</div>' : ''}
+      <div class="row">
+        <div class="mini"><div class="label">Acertos</div><div class="value">${hits}</div></div>
+        <div class="mini"><div class="label">Precisão</div><div class="value">${acc}%</div></div>
+        <div class="mini"><div class="label">Combo máx</div><div class="value">x${maxCombo}</div></div>
+        <div class="mini"><div class="label">Recorde</div><div class="value">${best}</div></div>
+      </div>
+      <button id="startBtn">Jogar de novo</button>
+      <div class="hint">Pressione Espaço para reiniciar</div>`;
+    overlay.classList.remove('hidden');
+    document.getElementById('startBtn').addEventListener('click', start);
+  }
+
+  function updateHud() {
+    scoreEl.textContent = score;
+    comboEl.textContent = 'x' + Math.max(combo, 1);
+  }
+
+  function handleClick(cx, cy) {
+    if (state !== 'playing') return;
+    const now = performance.now();
+    let hitIndex = -1;
+    for (let i = targets.length - 1; i >= 0; i--) {
+      const t = targets[i];
+      const r = currentRadius(t, now);
+      const d = Math.hypot(cx - t.x, cy - t.y);
+      if (d <= r + 4) { hitIndex = i; break; }
+    }
+    if (hitIndex >= 0) {
+      const t = targets[hitIndex];
+      const r = currentRadius(t, now);
+      const base = pointsFor(r);
+      combo++;
+      maxCombo = Math.max(maxCombo, combo);
+      const mult = 1 + (combo - 1) * 0.15;
+      const gained = Math.round(base * mult);
+      score += gained;
+      hits++;
+      targets.splice(hitIndex, 1);
+      addParticles(t.x, t.y, t.hue, 18);
+      floats.push({ x: t.x, y: t.y, text: '+' + gained, life: 1, hue: t.hue });
+      hitSound(combo);
+    } else {
+      combo = 0;
+      misses++;
+      missSound();
+      shakeT = 1;
+      floats.push({ x: cx, y: cy, text: 'errou', life: 1, hue: 0, miss: true });
+    }
+    updateHud();
+  }
+
+  canvas.addEventListener('pointerdown', (e) => {
+    const r = canvas.getBoundingClientRect();
+    handleClick(e.clientX - r.left, e.clientY - r.top);
+  });
+  window.addEventListener('keydown', (e) => {
+    if (e.code === 'Space' && state !== 'playing') { e.preventDefault(); start(); }
+  });
+  startBtn.addEventListener('click', start);
+
+  function loop() {
+    const now = performance.now();
+
+    if (state === 'playing') {
+      const remaining = roundEnd - now;
+      timebar.style.width = Math.max(0, remaining / ROUND_MS * 100) + '%';
+      if (remaining <= 0) { end(); }
+
+      // dificuldade progressiva
+      const prog = 1 - Math.max(0, remaining) / ROUND_MS;
+      spawnGap = 780 - prog * 430;
+
+      if (now - lastSpawn > spawnGap && targets.length < 5) {
+        spawnTarget();
+        lastSpawn = now;
+      }
+      // remove alvos expirados (perde combo)
+      for (let i = targets.length - 1; i >= 0; i--) {
+        if (now - targets[i].born > targets[i].life + 260) {
+          targets.splice(i, 1);
+          if (combo > 0) { combo = 0; updateHud(); }
+        }
+      }
+    }
+
+    // ---- render ----
+    ctx.clearRect(0, 0, W, H);
+    ctx.save();
+    if (shakeT > 0) {
+      const s = shakeT * 8;
+      ctx.translate((Math.random() - .5) * s, (Math.random() - .5) * s);
+      shakeT = Math.max(0, shakeT - 0.08);
+    }
+
+    // grade de fundo
+    ctx.strokeStyle = 'rgba(255,255,255,.035)';
+    ctx.lineWidth = 1;
+    const grid = 40;
+    for (let x = 0; x < W; x += grid) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke(); }
+    for (let y = 0; y < H; y += grid) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }
+
+    // alvos
+    for (const t of targets) {
+      const r = currentRadius(t, now);
+      const k = (now - t.born) / t.life;
+      const alpha = k > 1 ? Math.max(0, 1 - (k - 1) * 4) : 1;
+      ctx.globalAlpha = alpha;
+      // anéis
+      for (let ring = 0; ring < 3; ring++) {
+        const rr = r * (1 - ring * 0.34);
+        ctx.beginPath();
+        ctx.arc(t.x, t.y, rr, 0, Math.PI * 2);
+        ctx.fillStyle = ring % 2 === 0
+          ? `hsl(${t.hue} 85% ${58 - ring * 8}%)`
+          : '#fff';
+        ctx.fill();
+      }
+      // brilho externo quando pequeno (quase sumindo)
+      if (r < MIN_R + 12) {
+        ctx.globalAlpha = alpha * 0.5;
+        ctx.beginPath();
+        ctx.arc(t.x, t.y, r + 8 + Math.sin(now / 90) * 3, 0, Math.PI * 2);
+        ctx.strokeStyle = 'hsl(150 80% 60%)';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+    }
+
+    // partículas
+    for (let i = particles.length - 1; i >= 0; i--) {
+      const p = particles[i];
+      p.x += p.vx; p.y += p.vy;
+      p.vx *= 0.94; p.vy *= 0.94;
+      p.life -= 0.03;
+      if (p.life <= 0) { particles.splice(i, 1); continue; }
+      ctx.globalAlpha = p.life;
+      ctx.fillStyle = `hsl(${p.hue} 85% 62%)`;
+      ctx.fillRect(p.x - 2, p.y - 2, 4, 4);
+    }
+    ctx.globalAlpha = 1;
+
+    // textos flutuantes
+    ctx.textAlign = 'center';
+    ctx.font = '700 20px -apple-system, Segoe UI, Roboto, sans-serif';
+    for (let i = floats.length - 1; i >= 0; i--) {
+      const f = floats[i];
+      f.y -= 0.8; f.life -= 0.022;
+      if (f.life <= 0) { floats.splice(i, 1); continue; }
+      ctx.globalAlpha = Math.max(0, f.life);
+      ctx.fillStyle = f.miss ? '#ff6b6b' : `hsl(${f.hue} 90% 70%)`;
+      ctx.fillText(f.text, f.x, f.y);
+    }
+    ctx.globalAlpha = 1;
+
+    ctx.restore();
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
